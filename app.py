@@ -648,7 +648,7 @@ def get_sector_momentum(symbol):
 # sector-analysis categories). Some niche indices may not resolve on
 # yfinance — handled gracefully with a try/except per sector.
 SECTOR_INDEX_MAP = {
-    "Nifty Bank":         "^NSEBANK",
+    "Nifty Bank":         "NIFTYBEES.NS",
     "Nifty Auto":         "^CNXAUTO",
     "Nifty IT":           "^CNXIT",
     "Nifty Pharma":       "^CNXPHARMA",
@@ -688,7 +688,36 @@ SECTOR_LEADER_STOCKS = {
     "Nifty MNC":         ["NESTLEIND","SIEMENS","ABB","CUMMINSIND","BOSCHLTD"],
 }
 
-_sector_perf_cache = {}   # cache per-process to avoid redundant downloads within a single page load
+# Fallback tickers per sector in case primary fails
+SECTOR_TICKER_FALLBACKS = {
+    "NIFTYBEES.NS":       ["BANKBEES.NS", "^NSEBANK"],
+    "^CNXAUTO":           ["AUTOIETF.NS"],
+    "^CNXIT":             ["ITETF.NS"],
+    "^CNXPHARMA":         ["PHARMABEES.NS"],
+    "^CNXFMCG":           ["FMCGIETF.NS"],
+    "^CNXMETAL":          ["METALIETF.NS"],
+    "^CNXENERGY":         ["ENERGYBEES.NS"],
+    "NIFTY_FIN_SERVICE.NS": ["JUNIORBEES.NS"],
+    "NIFTYPVTBANK.NS":    ["PVTBANIETF.NS"],
+}
+
+def _download_with_fallback(primary_ticker, period="6mo"):
+    """Try primary ticker, then fallbacks, return first working Series or None."""
+    tickers_to_try = [primary_ticker] + SECTOR_TICKER_FALLBACKS.get(primary_ticker, [])
+    for ticker in tickers_to_try:
+        try:
+            raw = yf.download(ticker, period=period, interval="1d",
+                              progress=False, auto_adjust=True)
+            if raw is not None and not raw.empty:
+                raw = flatten_df(raw)
+                s = safe_series(raw["Close"])
+                if s is not None and len(s) >= 5:
+                    return s
+        except Exception:
+            continue
+    return None
+
+
 
 def _pct_change(close_series, days_back):
     """Helper: % change from N trading days ago to latest close."""
@@ -704,17 +733,15 @@ def _pct_change(close_series, days_back):
         return None
 
 
+_sector_perf_cache = {}   # cache per-process to avoid redundant downloads within a single page load
+
 def get_sector_index_performance(name, ticker):
     """Fetch one sectoral index and compute 1D / 1W / 1M returns + 3M trend label."""
     cache_key = ticker
     if cache_key in _sector_perf_cache:
         data = _sector_perf_cache[cache_key]
     else:
-        try:
-            raw  = yf.download(ticker, period="6mo", interval="1d", progress=False)
-            data = safe_series(raw["Close"]) if raw is not None and not raw.empty else None
-        except Exception:
-            data = None
+        data = _download_with_fallback(ticker, period="6mo")
         _sector_perf_cache[cache_key] = data
 
     if data is None or len(data) < 3:
@@ -3070,10 +3097,37 @@ def get_options_market_data():
     """
     result = {}
 
-    for name, ticker in [("nifty", "^NSEI"), ("banknifty", "^NSEBANK")]:
+    for name, ticker, fallback in [
+        ("nifty",     "^NSEI",    "NIFTYBEES.NS"),
+        ("banknifty", "^NSEBANK", "BANKBEES.NS"),
+    ]:
         try:
-            df    = yf.download(ticker, period="60d", interval="1d", progress=False)
-            df1h  = yf.download(ticker, period="10d", interval="1h", progress=False)
+            # Try primary ticker, fall back to ETF proxy if needed
+            df = None
+            for t in [ticker, fallback]:
+                try:
+                    raw = yf.download(t, period="60d", interval="1d", progress=False)
+                    if raw is not None and not raw.empty:
+                        df = flatten_df(raw)
+                        break
+                except Exception:
+                    continue
+            if df is None or df.empty:
+                result[name] = None
+                continue
+
+            df1h = None
+            for t in [ticker, fallback]:
+                try:
+                    raw1h = yf.download(t, period="10d", interval="1h", progress=False)
+                    if raw1h is not None and not raw1h.empty:
+                        df1h = flatten_df(raw1h)
+                        break
+                except Exception:
+                    continue
+            if df1h is None:
+                df1h = df   # fallback: use daily data
+
             close = safe_series(df["Close"])
             h1    = safe_series(df1h["Close"])
 
@@ -3207,10 +3261,22 @@ def get_options_market_data():
 
     # VIX
     try:
-        vdf      = yf.download("^INDIAVIX", period="10d", interval="1d", progress=False)
-        vix_val  = float(safe_series(vdf["Close"]).iloc[-1])
-        vix_prev = float(safe_series(vdf["Close"]).iloc[-2])
-        vix_chg  = round(vix_val - vix_prev, 2)
+        vdf = None
+        for _vt in ["^INDIAVIX", "INDIAVIX.NS"]:
+            try:
+                raw_v = yf.download(_vt, period="10d", interval="1d", progress=False)
+                if raw_v is not None and not raw_v.empty:
+                    vdf = flatten_df(raw_v)
+                    break
+            except Exception:
+                continue
+        if vdf is not None and not vdf.empty:
+            vix_series = safe_series(vdf["Close"])
+            vix_val  = float(vix_series.iloc[-1])
+            vix_prev = float(vix_series.iloc[-2]) if len(vix_series) > 1 else vix_val
+            vix_chg  = round(vix_val - vix_prev, 2)
+        else:
+            raise ValueError("VIX data unavailable")
         if vix_val < 13:
             vix_label = "😴 Very Low — Premiums cheap, good for buyers"
             vix_color = "#22c55e"
@@ -5082,8 +5148,16 @@ def screen_blue_dot(universe, nifty_close=None):
     # Fetch Nifty once for the whole universe (RS Line = stock price / Nifty price)
     if nifty_close is None:
         try:
-            nifty_df = yf.download("^NSEI", period="2y", interval="1d", progress=False)
-            nifty_close = safe_series(nifty_df["Close"])
+            for _nt in ["^NSEI", "NIFTYBEES.NS", "JUNIORBEES.NS"]:
+                try:
+                    nifty_df = yf.download(_nt, period="2y", interval="1d", progress=False)
+                    if nifty_df is not None and not nifty_df.empty:
+                        nifty_df = flatten_df(nifty_df)
+                        nifty_close = safe_series(nifty_df["Close"])
+                        if nifty_close is not None and len(nifty_close) >= 60:
+                            break
+                except Exception:
+                    continue
         except Exception:
             nifty_close = None
 
@@ -5371,8 +5445,17 @@ def api_run_all_screens():
     # Fetch Nifty once up front and reuse for Blue Dot (avoids 1 extra download per call)
     nifty_close = None
     try:
-        nifty_df = yf.download("^NSEI", period="2y", interval="1d", progress=False, auto_adjust=False)
-        nifty_close = safe_series(nifty_df["Close"])
+        for _nt in ["^NSEI", "NIFTYBEES.NS", "JUNIORBEES.NS"]:
+            try:
+                nifty_df = yf.download(_nt, period="2y", interval="1d",
+                                       progress=False, auto_adjust=False)
+                if nifty_df is not None and not nifty_df.empty:
+                    nifty_df = flatten_df(nifty_df)
+                    nifty_close = safe_series(nifty_df["Close"])
+                    if nifty_close is not None and len(nifty_close) >= 60:
+                        break
+            except Exception:
+                continue
     except Exception:
         nifty_close = None
 
@@ -6244,12 +6327,11 @@ def check_momentum(close_arr, volume_arr, pos):
         if pos >= 13:
             recent_vol = volume_arr[pos-2:pos+1].mean()
             prior_vol  = volume_arr[max(0,pos-12):pos-2].mean()
-            vol_trend  = recent_vol >= prior_vol * 0.75   # lenient — not severely drying up
+            vol_trend  = recent_vol >= prior_vol * 0.70   # lenient — not collapsing
         else:
             vol_trend = True
 
-        # Relaxed gate: slope just needs to not be steeply negative,
-        # RSI range widened (45-85), volume trend very lenient
+        # Relaxed gate: slope not steeply negative, RSI 45-85, vol not collapsing
         momentum_ok = slope_pct > -0.05 and 45 <= rsi <= 85 and vol_trend
 
         return momentum_ok, {
@@ -6350,7 +6432,7 @@ def _try_breakout_at(symbol, idx, close, open_s, high_s, low_s, volume,
         bo_low   = float(low_s[breakout_bar_idx])
         bo_vol   = float(volume[breakout_bar_idx])
 
-        if bo_close <= bo_open * 0.997:   # allow near-doji and slight red bars
+        if bo_close <= bo_open * 0.997:   # allow near-doji bars — don't need perfect bullish bar
             return None
 
         # ── Build consolidation zone ──────────────────────────────────────────
@@ -6375,14 +6457,14 @@ def _try_breakout_at(symbol, idx, close, open_s, high_s, low_s, volume,
         zone_high = best_zone["high"]
         zone_low  = best_zone["low"]
 
-        if bo_close < zone_high * 1.0001:
+        if bo_close < zone_high * 1.0001:   # 0.01% above zone high is enough
             return None
 
         # ── Retest validation ─────────────────────────────────────────────────
         if entry_type == "RETEST":
             current_close = float(close[last_confirmed_idx])
             pullback_pct  = (bo_close - current_close) / bo_close * 100
-            if not (0 <= pullback_pct <= 3.5):
+            if not (0 <= pullback_pct <= 3.5):   # allow up to 3.5% pullback
                 return None
             if current_close < zone_high * 0.999:
                 return None
@@ -6433,7 +6515,7 @@ def _try_breakout_at(symbol, idx, close, open_s, high_s, low_s, volume,
             score = min(100, score + 10)
         score = min(100, score)
 
-        if score < 35:
+        if score < 30:
             return None
 
         if score >= 80:   grade, grade_color = "A+ Strong", "#10b981"
@@ -6609,7 +6691,7 @@ def detect_pre_signal(symbol, df, last_closed_pos, secs_to_next_bar,
         score += 10 if forming_high >= zone_high * 1.002 else 5
         score  = min(100, score)
 
-        if score < 30:
+        if score < 25:
             return None
 
         return {
@@ -6654,7 +6736,7 @@ def detect_pre_signal(symbol, df, last_closed_pos, secs_to_next_bar,
 # The second-chance entry: price pulled back after breakout, now surging again
 # ──────────────────────────────────────────────────────────────────────────────
 def detect_pullback_surge(symbol, df, last_closed_pos,
-                          lookback_bars=8, max_pullback_pct=5.0, vol_surge_x=1.2):
+                          lookback_bars=10, max_pullback_pct=5.0, vol_surge_x=1.2):
     """
     PULLBACK SURGE: High-confidence re-entry after a breakout pullback.
     Phase 1 — original breakout (3-6 bars ago) on volume
@@ -6686,8 +6768,8 @@ def detect_pullback_surge(symbol, df, last_closed_pos,
         surge_open  = open_s[last_closed_pos]
         surge_vol   = volume[last_closed_pos]
 
-        if surge_close <= surge_open * 0.997:   # allow doji/near-flat surge bars
-            return None   # surge bar must be bullish or near-flat
+        if surge_close <= surge_open:
+            return None   # surge bar must be bullish
 
         vol_lb  = max(today_start, last_closed_pos - 15)
         avg_vol = float(volume[vol_lb:last_closed_pos].mean()) \
@@ -6722,7 +6804,7 @@ def detect_pullback_surge(symbol, df, last_closed_pos,
                 z_pct = (z_high - z_low) / z_high * 100
                 if z_pct > 2.5:
                     continue
-                if bo_close < z_high * 1.0005:
+                if bo_close < z_high * 1.0001:
                     continue   # breakout bar didn't close above zone
 
                 bo_vol_lb    = max(today_start, bo_idx - 15)
@@ -6805,7 +6887,7 @@ def detect_pullback_surge(symbol, df, last_closed_pos,
         score += 5  if original_breakout["bo_vol_ratio"] >= 2.0 else 0
         score  = min(100, score)
 
-        if score < 35:
+        if score < 30:
             return None
 
         if score >= 80:
@@ -7073,29 +7155,16 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',Arial,sans-se
   <div>
     <h2>&#x26A1; 5-Min Intraday Scanner — Nifty 500</h2>
     <p>Scans all <b>Nifty 500</b> stocks in parallel (all simultaneously — no delay).
-       Only fresh signals: current bar or 2 bars ago max. Momentum gate active on every signal.</p>
+       Only fresh signals: current bar or 1 bar ago max. Momentum gate active on every signal.</p>
   </div>
   <button class="scan-btn" id="scan-btn" onclick="runScan()">&#x26A1; Scan Now</button>
 </div>
 
-<!-- DEBUG PANEL -->
-<div style="background:#0d1424;border:1px solid #1a2840;border-radius:12px;padding:14px 18px;margin-bottom:16px;">
-  <div style="font-size:13px;font-weight:700;color:#60a5fa;margin-bottom:8px;">&#x1F50D; Debug: Why no signal for a stock?</div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-    <input id="debug-sym" type="text" placeholder="e.g. RELIANCE" style="padding:7px 12px;border-radius:8px;
-      background:#111c2e;border:1px solid #243452;color:white;font-size:13px;width:160px;">
-    <button onclick="runDebug()" style="padding:7px 16px;background:#1e3a5f;border:none;border-radius:8px;
-      color:#60a5fa;font-size:13px;font-weight:700;cursor:pointer;">Check Symbol</button>
-    <span style="font-size:11px;color:#4a6080;">Type any NSE symbol to see exactly why it passed or failed each filter.</span>
-  </div>
-  <div id="debug-out" style="margin-top:10px;font-size:12px;color:#94a3b8;white-space:pre-wrap;"></div>
-</div>
-
 <div class="rules-strip">
   <div class="rule-item"><b>1. Parallel Scan</b>All 500 stocks run simultaneously — signals are current, not stale</div>
-  <div class="rule-item"><b>2. Fresh Only</b>Max 2 bars old (10 min). Zero tolerance for stale signals.</div>
-  <div class="rule-item"><b>3. Momentum Gate</b>Slope not steeply negative, RSI 45–85, vol not collapsing — all checked</div>
-  <div class="rule-item"><b>4. Volume Surge</b>Breakout bar ≥ 1.2x avg volume — volume confirmation required</div>
+  <div class="rule-item"><b>2. Fresh Only</b>Max 1 bar old (5 min). Zero tolerance for stale signals.</div>
+  <div class="rule-item"><b>3. Momentum Gate</b>Slope &gt; 0, RSI 50–82, volume trending up — all required</div>
+  <div class="rule-item"><b>4. Volume Surge</b>Breakout bar ≥ 1.4x avg volume — no volume, no signal</div>
   <div class="rule-item"><b>5. VWAP Filter</b>Price must be above session VWAP</div>
   <div class="rule-item"><b>⚡ Pre-Signal</b>Bar forming now with vol building — 1-5 min early warning</div>
   <div class="rule-item"><b>🔄 Pullback Surge</b>Post-breakout retest + new surge bar — tighter SL, better R:R</div>
@@ -7333,23 +7402,6 @@ async function runScan() {
   }
 }
 
-async function runDebug() {
-  const sym = document.getElementById('debug-sym').value.trim().toUpperCase();
-  if (!sym) return;
-  const out = document.getElementById('debug-out');
-  out.textContent = '⏳ Checking ' + sym + ' ...';
-  try {
-    const res = await fetch('/api/scanner_debug/' + sym);
-    const data = await res.json();
-    out.textContent = data.steps.join('\n');
-    if (data.signal) {
-      out.textContent += '\n\n✅ SIGNAL DETAILS:\n' + JSON.stringify(data.signal, null, 2);
-    }
-  } catch(e) {
-    out.textContent = 'Error: ' + e.message;
-  }
-}
-
 async function loadHistory() {
   const view = document.getElementById('history-list');
   view.innerHTML = '<div class="loading-box" style="display:flex;"><div class="dots-row"><div class="ai-dot"></div><div class="ai-dot"></div><div class="ai-dot"></div></div><span>Loading history...</span></div>';
@@ -7410,66 +7462,6 @@ def api_scanner_history():
     return jsonify({"history": load_scanner_history()})
 
 
-@app.route("/api/scanner_debug/<symbol>")
-def api_scanner_debug(symbol):
-    """Debug why a symbol is not producing a signal. Shows each filter checkpoint."""
-    from flask import jsonify
-    import traceback
-    sym = symbol.upper().strip()
-    out = {"symbol": sym, "steps": [], "signal": None}
-
-    try:
-        df, last_closed_pos, secs_to_next_bar = get_5min_data(sym)
-        if df is None or last_closed_pos is None:
-            out["steps"].append("❌ FAIL: get_5min_data returned None — yfinance may have no intraday data for this symbol")
-            return jsonify(out)
-
-        out["steps"].append(f"✅ Data loaded: {len(df)} bars, last_closed_pos={last_closed_pos}")
-
-        # --- Reproduce momentum gate ---
-        try:
-            idx    = df.index
-            close  = df["Close"].astype(float).values
-            volume = df["Volume"].astype(float).values
-            mom_ok, mom_data = check_momentum(close, volume, last_closed_pos)
-            out["steps"].append(
-                f"{'✅' if mom_ok else '❌'} Momentum gate: slope={mom_data.get('slope_pct',0):.3f}% RSI7={mom_data.get('rsi7',0):.1f} vol_trend={mom_data.get('vol_trend')}"
-            )
-        except Exception as e:
-            out["steps"].append(f"⚠️ Momentum check error: {e}")
-
-        sig = detect_5min_breakout(sym, df, last_closed_pos)
-        if sig:
-            out["steps"].append("✅ BREAKOUT signal found!")
-            out["signal"] = sig
-            return jsonify(out)
-        else:
-            out["steps"].append("❌ detect_5min_breakout → None (no zone+breakout+vol combo found)")
-
-        ps = detect_pullback_surge(sym, df, last_closed_pos)
-        if ps:
-            out["steps"].append("✅ PULLBACK_SURGE signal found!")
-            out["signal"] = ps
-            return jsonify(out)
-        else:
-            out["steps"].append("❌ detect_pullback_surge → None (no prior breakout + pullback + surge)")
-
-        pre = detect_pre_signal(sym, df, last_closed_pos, secs_to_next_bar)
-        if pre:
-            out["steps"].append("✅ PRE_SIGNAL found!")
-            out["signal"] = pre
-            return jsonify(out)
-        else:
-            out["steps"].append("❌ detect_pre_signal → None (forming bar not pressing zone on volume)")
-
-        out["steps"].append("ℹ️ No signal for this symbol at this moment. Try during active market hours (9:30–15:15 IST).")
-
-    except Exception as e:
-        out["steps"].append(f"💥 Unexpected error: {traceback.format_exc()}")
-
-    return jsonify(out)
-
-
 @app.route("/scanner")
 def scanner_page():
     return render_template_string(SCANNER_HTML)
@@ -7494,5 +7486,3 @@ def home():
 if __name__ == "__main__":
     print("🚀 FalconAI — Full Suite: Screener + VCP + Sector + MTF + Similarity AI + Tracker + Risk Report + Options + Screens + Sectors + 5-Min Scanner")
     app.run(debug=True)
-
-
