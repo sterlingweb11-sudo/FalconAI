@@ -532,10 +532,10 @@ SECTOR_MAP = {
     "TCS":"^CNXIT","INFY":"^CNXIT","WIPRO":"^CNXIT","HCLTECH":"^CNXIT",
     "TECHM":"^CNXIT","LTIM":"^CNXIT","MPHASIS":"^CNXIT","PERSISTENT":"^CNXIT",
     # Banking & Finance
-    "HDFCBANK":"BANKBEES.NS","ICICIBANK":"BANKBEES.NS","SBIN":"BANKBEES.NS",
-    "KOTAKBANK":"BANKBEES.NS","AXISBANK":"BANKBEES.NS","INDUSINDBK":"BANKBEES.NS",
-    "BANDHANBNK":"BANKBEES.NS","FEDERALBNK":"BANKBEES.NS","IDFCFIRSTB":"BANKBEES.NS",
-    "BAJFINANCE":"NIFTYBEES.NS","BAJAJFINSV":"NIFTYBEES.NS",
+    "HDFCBANK":"^NSEBANK","ICICIBANK":"^NSEBANK","SBIN":"^NSEBANK",
+    "KOTAKBANK":"^NSEBANK","AXISBANK":"^NSEBANK","INDUSINDBK":"^NSEBANK",
+    "BANDHANBNK":"^NSEBANK","FEDERALBNK":"^NSEBANK","IDFCFIRSTB":"^NSEBANK",
+    "BAJFINANCE":"NIFTY_FIN_SERVICE.NS","BAJAJFINSV":"NIFTY_FIN_SERVICE.NS",
     # Auto
     "MARUTI":"^CNXAUTO","TATAMOTORS":"^CNXAUTO","M&M":"^CNXAUTO",
     "BAJAJ-AUTO":"^CNXAUTO","HEROMOTOCO":"^CNXAUTO","EICHERMOT":"^CNXAUTO",
@@ -558,20 +558,17 @@ SECTOR_MAP = {
 }
 
 SECTOR_NAMES = {
-    "BANKBEES.NS":      "Banking",
-    "AUTOIETF.NS":      "Auto",
-    "ITETF.NS":         "IT",
-    "PHARMABEES.NS":    "Pharma",
-    "FMCGIETF.NS":      "FMCG",
-    "METALIETF.NS":     "Metals",
-    "ENERGYBEES.NS":    "Energy",
-    "NIFTYREITETF.NS":  "Realty",
-    "INFRABEES.NS":     "Infra",
-    "PSUBNKIETF.NS":    "PSU Bank",
-    "NIFTYBEES.NS":     "Financial Services",
-    "PVTBANIETF.NS":    "Pvt Bank",
-    "CONSUMPTION.NS":   "Consumption",
-    "MNC.NS":           "MNC",
+    "^CNXPHARMA":           "Pharma",
+    "^CNXIT":               "IT",
+    "^NSEBANK":             "Banking",
+    "NIFTY_FIN_SERVICE.NS": "Financial Services",
+    "^CNXAUTO":             "Auto",
+    "^CNXFMCG":             "FMCG",
+    "^CNXMETAL":            "Metals",
+    "^CNXENERGY":           "Energy",
+    "^CNXINFRA":            "Infra",
+    "^CNXREALTY":           "Realty",
+    "^CNXCONSUMP":          "Consumption",
 }
 
 _sector_cache = {}   # cache sector data for the session to avoid redundant downloads
@@ -650,46 +647,30 @@ def get_sector_momentum(symbol):
 # These are the standard NSE sectoral indices (mirrors moneycontrol's
 # sector-analysis categories). Some niche indices may not resolve on
 # yfinance — handled gracefully with a try/except per sector.
-SECTOR_INDEX_MAP = {
-    "Nifty Bank":         "BANKBEES.NS",
-    "Nifty Auto":         "AUTOIETF.NS",
-    "Nifty IT":           "ITETF.NS",
-    "Nifty Pharma":       "PHARMABEES.NS",
-    "Nifty FMCG":         "FMCGIETF.NS",
-    "Nifty Metal":        "METALIETF.NS",
-    "Nifty Energy":       "ENERGYBEES.NS",
-    "Nifty Realty":       "NIFTYREITETF.NS",
-    "Nifty Infra":        "INFRABEES.NS",
-    "Nifty PSU Bank":     "PSUBNKIETF.NS",
-    "Nifty Fin Service":  "NIFTYBEES.NS",
-    "Nifty Pvt Bank":     "PVTBANIETF.NS",
-    "Nifty Consumption":  "CONSUMPTION.NS",
-    "Nifty MNC":          "MNC.NS",
-}
 
-# Leader stocks per sector — used to compute "who's leading the sector"
-# on daily / weekly / monthly basis. Kept to the most liquid, representative
-# names per sector so the page stays fast.
+# ── SECTOR ENGINE — Stock-average based (works from any server worldwide) ──────
+# Instead of fetching blocked NSE index tickers (^NSEBANK, ^CNXAUTO etc),
+# we compute sector performance by averaging the top liquid stocks in each sector.
+# This is 100% reliable from Render/PythonAnywhere/any non-India server.
+
 SECTOR_LEADER_STOCKS = {
-    "Nifty Bank":        ["HDFCBANK","ICICIBANK","SBIN","KOTAKBANK","AXISBANK","INDUSINDBK","BANDHANBNK","FEDERALBNK","IDFCFIRSTB","PNB"],
-    "Nifty Auto":        ["MARUTI","TATAMOTORS","M&M","BAJAJ-AUTO","HEROMOTOCO","EICHERMOT","TVSMOTOR","ASHOKLEY","BHARATFORG","BOSCHLTD"],
-    "Nifty IT":          ["TCS","INFY","WIPRO","HCLTECH","TECHM","LTIM","MPHASIS","PERSISTENT","COFORGE","NAUKRI"],
-    "Nifty Pharma":      ["SUNPHARMA","CIPLA","DRREDDY","DIVISLAB","BIOCON","AUROPHARMA","LUPIN","TORNTPHARM","ALKEM"],
-    "Nifty FMCG":        ["HINDUNILVR","ITC","NESTLEIND","BRITANNIA","DABUR","MARICO","GODREJCP","TATACONSUM"],
-    "Nifty Metal":       ["TATASTEEL","JSWSTEEL","HINDALCO","COALINDIA","VEDL","NMDC","SAIL","JINDALSTEL","HINDZINC"],
-    "Nifty Energy":      ["RELIANCE","ONGC","IOC","BPCL","GAIL","POWERGRID","NTPC","ADANIGREEN","TATAPOWER"],
-    "Nifty Realty":      ["DLF","GODREJPROP","OBEROIRLTY"],
-    "Nifty Infra":       ["LT","ADANIPORTS","SIEMENS","ABB","CUMMINSIND"],
-    "Nifty Media":       ["ZOMATO"],
-    "Nifty PSU Bank":    ["SBIN","BANKBARODA","PNB","CANBK"],
-    "Nifty Fin Service": ["BAJFINANCE","BAJAJFINSV","HDFCBANK","ICICIBANK","SBILIFE","HDFCLIFE"],
+    "Nifty Bank":        ["HDFCBANK","ICICIBANK","SBIN","KOTAKBANK","AXISBANK","INDUSINDBK","PNB","BANKBARODA"],
+    "Nifty Auto":        ["MARUTI","TATAMOTORS","M&M","BAJAJ-AUTO","HEROMOTOCO","EICHERMOT","TVSMOTOR"],
+    "Nifty IT":          ["TCS","INFY","WIPRO","HCLTECH","TECHM","LTIM","PERSISTENT","COFORGE"],
+    "Nifty Pharma":      ["SUNPHARMA","CIPLA","DRREDDY","DIVISLAB","AUROPHARMA","LUPIN","TORNTPHARM"],
+    "Nifty FMCG":        ["HINDUNILVR","ITC","NESTLEIND","BRITANNIA","DABUR","MARICO","TATACONSUM"],
+    "Nifty Metal":       ["TATASTEEL","JSWSTEEL","HINDALCO","COALINDIA","VEDL","NMDC","SAIL"],
+    "Nifty Energy":      ["RELIANCE","ONGC","IOC","BPCL","GAIL","POWERGRID","NTPC","TATAPOWER"],
+    "Nifty Realty":      ["DLF","GODREJPROP","OBEROIRLTY","LODHA","PRESTIGE"],
+    "Nifty Infra":       ["LT","ADANIPORTS","SIEMENS","ABB","CUMMINSIND","CONCOR"],
+    "Nifty PSU Bank":    ["SBIN","BANKBARODA","PNB","CANBK","UNIONBANK"],
+    "Nifty Fin Service": ["BAJFINANCE","BAJAJFINSV","HDFCAMC","MUTHOOTFIN","CHOLAFIN","SHRIRAMFIN"],
     "Nifty Pvt Bank":    ["HDFCBANK","ICICIBANK","KOTAKBANK","AXISBANK","INDUSINDBK","FEDERALBNK"],
-    "Nifty Consumption": ["DMART","TRENT","TITAN","NYKAA"],
-    "Nifty Commodities":  ["RELIANCE","TATASTEEL","JSWSTEEL","HINDALCO","UPL","SRF","PIIND"],
+    "Nifty Consumption": ["DMART","TRENT","TITAN","JUBLFOOD","ZOMATO"],
     "Nifty MNC":         ["NESTLEIND","SIEMENS","ABB","CUMMINSIND","BOSCHLTD"],
 }
 
-_sector_perf_cache = {}   # cache per-process to avoid redundant downloads within a single page load
+_sector_perf_cache = {}   # in-memory cache to avoid repeat downloads in same request
 
 def _pct_change(close_series, days_back):
     """Helper: % change from N trading days ago to latest close."""
@@ -705,103 +686,114 @@ def _pct_change(close_series, days_back):
         return None
 
 
-def get_sector_index_performance(name, ticker):
-    """Fetch one sectoral index and compute 1D / 1W / 1M returns + 3M trend label."""
-    cache_key = ticker
-    if cache_key in _sector_perf_cache:
-        data = _sector_perf_cache[cache_key]
-    else:
-        try:
-            raw  = yf.download(ticker, period="6mo", interval="1d", progress=False)
-            data = safe_series(raw["Close"]) if raw is not None and not raw.empty else None
-        except Exception:
-            data = None
-        _sector_perf_cache[cache_key] = data
+def _get_stock_close(symbol):
+    """Cached daily close series for a stock symbol."""
+    if symbol in _sector_perf_cache:
+        return _sector_perf_cache[symbol]
+    try:
+        df = yf.download(symbol + ".NS", period="6mo", interval="1d",
+                         progress=False, auto_adjust=True)
+        if df is None or df.empty:
+            _sector_perf_cache[symbol] = None
+            return None
+        df = flatten_df(df)
+        s  = safe_series(df["Close"])
+        _sector_perf_cache[symbol] = s if len(s) >= 5 else None
+        return _sector_perf_cache[symbol]
+    except Exception:
+        _sector_perf_cache[symbol] = None
+        return None
 
-    if data is None or len(data) < 3:
+
+def get_sector_index_performance(name, stocks_list):
+    """
+    Compute sector performance by equal-weighting the top liquid stocks.
+    Returns the same dict shape as before so the template works unchanged.
+    """
+    returns_d1, returns_w1, returns_m1, returns_m3 = [], [], [], []
+    last_prices = []
+
+    for sym in stocks_list[:6]:   # use top 6 for speed
+        s = _get_stock_close(sym)
+        if s is None or len(s) < 5:
+            continue
+        d1 = _pct_change(s, 1)
+        w1 = _pct_change(s, 5)
+        m1 = _pct_change(s, 21)
+        m3 = _pct_change(s, 63)
+        if d1 is not None: returns_d1.append(d1)
+        if w1 is not None: returns_w1.append(w1)
+        if m1 is not None: returns_m1.append(m1)
+        if m3 is not None: returns_m3.append(m3)
+        last_prices.append(float(s.iloc[-1]))
+
+    if not returns_d1:
         return {
-            "name": name, "ticker": ticker, "available": False,
+            "name": name, "ticker": name, "available": False,
             "price": None, "d1": None, "w1": None, "m1": None, "m3": None,
             "color": "#475569", "label": "Data unavailable",
         }
 
-    price = round(float(data.iloc[-1]), 2)
-    d1    = _pct_change(data, 1)
-    w1    = _pct_change(data, 5)
-    m1    = _pct_change(data, 21)
-    m3    = _pct_change(data, 63)
+    d1 = round(sum(returns_d1) / len(returns_d1), 2)
+    w1 = round(sum(returns_w1) / len(returns_w1), 2) if returns_w1 else None
+    m1 = round(sum(returns_m1) / len(returns_m1), 2) if returns_m1 else None
+    m3 = round(sum(returns_m3) / len(returns_m3), 2) if returns_m3 else None
 
-    # Overall momentum label driven by daily + weekly combo
-    ref = d1 if d1 is not None else 0
-    if ref >= 1.5:
-        label, color = "🚀 Strong Up", "#10b981"
-    elif ref >= 0.3:
-        label, color = "🟢 Up", "#34d399"
-    elif ref > -0.3:
-        label, color = "⚪ Flat", "#94a3b8"
-    elif ref > -1.5:
-        label, color = "🔴 Down", "#f87171"
-    else:
-        label, color = "🔻 Strong Down", "#ef4444"
+    if d1 >= 1.5:   label, color = "🚀 Strong Up",   "#10b981"
+    elif d1 >= 0.3: label, color = "🟢 Up",           "#34d399"
+    elif d1 > -0.3: label, color = "⚪ Flat",          "#94a3b8"
+    elif d1 > -1.5: label, color = "🔴 Down",          "#f87171"
+    else:           label, color = "🔻 Strong Down",   "#ef4444"
 
     return {
-        "name": name, "ticker": ticker, "available": True,
-        "price": price, "d1": d1, "w1": w1, "m1": m1, "m3": m3,
+        "name": name, "ticker": name, "available": True,
+        "price": round(last_prices[0], 2) if last_prices else None,
+        "d1": d1, "w1": w1, "m1": m1, "m3": m3,
         "color": color, "label": label,
     }
 
 
 def get_sector_leaders(sector_name, timeframe="d1"):
-    """
-    Rank the leader stocks of a sector by return over the given timeframe.
-    timeframe: 'd1' (1 day), 'w1' (1 week / 5 sessions), 'm1' (1 month / 21 sessions)
-    Returns top 5 leaders sorted by return, descending.
-    """
-    stocks = SECTOR_LEADER_STOCKS.get(sector_name, [])
+    """Rank sector stocks by return for the given timeframe."""
+    stocks   = SECTOR_LEADER_STOCKS.get(sector_name, [])
     days_map = {"d1": 1, "w1": 5, "m1": 21}
-    days = days_map.get(timeframe, 1)
-
+    days     = days_map.get(timeframe, 1)
     out = []
     for sym in stocks:
-        try:
-            df = get_data(sym)
-            if df is None:
-                continue
-            close = safe_series(df["Close"])
-            ret   = _pct_change(close, days)
-            if ret is None:
-                continue
-            price = round(float(close.iloc[-1]), 2)
-            out.append({"symbol": sym, "price": price, "ret": ret})
-        except Exception:
-            continue
-
+        s = _get_stock_close(sym)
+        if s is None: continue
+        ret = _pct_change(s, days)
+        if ret is None: continue
+        out.append({"symbol": sym, "price": round(float(s.iloc[-1]), 2), "ret": ret})
     out.sort(key=lambda x: x["ret"], reverse=True)
     return out[:5]
 
 
 def get_all_sectors_performance():
-    """
-    Build the full sector dashboard dataset: every sector's D/W/M performance,
-    sorted by 1-day return (best first), plus top-3 leader stocks per sector
-    for each timeframe.
-    """
+    """Build full sector dashboard — now uses stock-average, no index tickers needed."""
+    import concurrent.futures
+    _sector_perf_cache.clear()   # fresh cache each page load
+
+    # Pre-fetch all stocks in parallel so the page loads fast
+    all_syms = list({s for stocks in SECTOR_LEADER_STOCKS.values() for s in stocks[:6]})
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(_get_stock_close, all_syms))
+
     sectors = []
-    for name, ticker in SECTOR_INDEX_MAP.items():
-        perf = get_sector_index_performance(name, ticker)
+    for name, stocks_list in SECTOR_LEADER_STOCKS.items():
+        perf = get_sector_index_performance(name, stocks_list)
         if perf["available"]:
             perf["leaders_d1"] = get_sector_leaders(name, "d1")[:3]
             perf["leaders_w1"] = get_sector_leaders(name, "w1")[:3]
             perf["leaders_m1"] = get_sector_leaders(name, "m1")[:3]
         else:
-            perf["leaders_d1"] = []
-            perf["leaders_w1"] = []
-            perf["leaders_m1"] = []
+            perf["leaders_d1"] = perf["leaders_w1"] = perf["leaders_m1"] = []
         sectors.append(perf)
 
-    # Sort: available sectors first (by 1-day return desc), unavailable at the end
     sectors.sort(key=lambda s: (not s["available"], -(s["d1"] if s["d1"] is not None else -999)))
     return sectors
+
+
 
 
 
@@ -1897,12 +1889,9 @@ function toggleMTF(id) {
 <div class="container">
 
 {% if error_msg %}
-<div style="background:#1a1a0a;border:1px solid #f59e0b;border-radius:10px;padding:12px 18px;
-  margin-bottom:16px;color:#f59e0b;font-size:13px;font-weight:600;">
+<div style="background:#1c1400;border:1px solid #f59e0b;border-radius:10px;padding:12px 18px;
+  margin-bottom:16px;color:#fbbf24;font-size:13px;font-weight:600;">
   {{ error_msg }}
-  <div style="font-size:11px;color:#d97706;margin-top:4px;font-weight:400;">
-    💡 Tip: Search up to 5 stocks at a time. Separate with commas or new lines.
-  </div>
 </div>
 {% endif %}
 
@@ -3081,39 +3070,10 @@ def get_options_market_data():
     """
     result = {}
 
-    # Use ETF proxies — NSE index tickers (^NSEI, ^NSEBANK) are blocked from non-India servers
-    INDEX_TICKERS = {
-        "nifty":     ["NIFTYBEES.NS", "JUNIORBEES.NS"],
-        "banknifty": ["BANKBEES.NS",  "PVTBANIETF.NS"],
-    }
-
-    for name, ticker_list in INDEX_TICKERS.items():
+    for name, ticker in [("nifty", "NIFTYBEES.NS"), ("banknifty", "BANKBEES.NS")]:
         try:
-            df = None
-            for t in ticker_list:
-                try:
-                    raw = yf.download(t, period="60d", interval="1d", progress=False)
-                    if raw is not None and not raw.empty:
-                        df = flatten_df(raw)
-                        break
-                except Exception:
-                    continue
-            if df is None or df.empty:
-                result[name] = None
-                continue
-
-            df1h = None
-            for t in ticker_list:
-                try:
-                    raw1h = yf.download(t, period="10d", interval="1h", progress=False)
-                    if raw1h is not None and not raw1h.empty:
-                        df1h = flatten_df(raw1h)
-                        break
-                except Exception:
-                    continue
-            if df1h is None or df1h.empty:
-                df1h = df
-
+            df    = yf.download(ticker, period="60d", interval="1d", progress=False)
+            df1h  = yf.download(ticker, period="10d", interval="1h", progress=False)
             close = safe_series(df["Close"])
             h1    = safe_series(df1h["Close"])
 
@@ -3245,24 +3205,12 @@ def get_options_market_data():
         except Exception as e:
             result[name] = None
 
-    # VIX — try multiple tickers
+    # VIX
     try:
-        vdf = None
-        for _vt in ["^INDIAVIX", "INDIAVIX.NS", "VIXIETF.NS"]:
-            try:
-                raw_v = yf.download(_vt, period="10d", interval="1d", progress=False)
-                if raw_v is not None and not raw_v.empty:
-                    vdf = flatten_df(raw_v)
-                    break
-            except Exception:
-                continue
-        if vdf is not None and not vdf.empty:
-            vix_s    = safe_series(vdf["Close"])
-            vix_val  = float(vix_s.iloc[-1])
-            vix_prev = float(vix_s.iloc[-2]) if len(vix_s) > 1 else vix_val
-            vix_chg  = round(vix_val - vix_prev, 2)
-        else:
-            raise ValueError("no vix data")
+        vdf      = yf.download("INDIAVIX.NS", period="10d", interval="1d", progress=False)
+        vix_val  = float(safe_series(vdf["Close"]).iloc[-1])
+        vix_prev = float(safe_series(vdf["Close"]).iloc[-2])
+        vix_chg  = round(vix_val - vix_prev, 2)
         if vix_val < 13:
             vix_label = "😴 Very Low — Premiums cheap, good for buyers"
             vix_color = "#22c55e"
@@ -3381,7 +3329,6 @@ def calc_pro_scalp_signal(index_name):
     index_name: 'nifty' or 'banknifty'
     Returns the full live scalp signal dict, or None if data is unavailable.
     """
-    # Use ETF proxies since ^NSEI/^NSEBANK are blocked from non-India servers
     ticker = "NIFTYBEES.NS" if index_name == "nifty" else "BANKBEES.NS"
     step   = 50 if index_name == "nifty" else 100
 
@@ -4733,11 +4680,8 @@ SCREENS_FILE = "screens_history.csv"
 
 # Nifty 500 — full universe for the intraday scanner.
 # Organised by sector for readability; scanner uses all of them.
-# Top 100 most liquid NSE stocks — optimised for Render free tier (512MB RAM, 30s timeout)
-# Scanning 500 stocks requires ~500 yfinance calls which exceeds free tier limits.
-# These 100 stocks cover all major sectors and generate the most intraday signals.
 NIFTY500_UNIVERSE = [
-    # Nifty 50 — highest liquidity
+    # Nifty 50 — large cap
     "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY","HINDUNILVR","ITC","SBIN",
     "BHARTIARTL","KOTAKBANK","LT","AXISBANK","BAJFINANCE","ASIANPAINT","MARUTI",
     "TITAN","SUNPHARMA","ULTRACEMCO","NESTLEIND","WIPRO","NTPC","ONGC","TATAMOTORS",
@@ -4745,19 +4689,46 @@ NIFTY500_UNIVERSE = [
     "HCLTECH","DRREDDY","CIPLA","DIVISLAB","BAJAJFINSV","GRASIM","BRITANNIA",
     "EICHERMOT","HEROMOTOCO","BPCL","IOC","HINDALCO","SBILIFE","HDFCLIFE",
     "APOLLOHOSP","INDUSINDBK","TATACONSUM","BAJAJ-AUTO","UPL","SHREECEM",
-    # Nifty Next 50 — high volume mid-large caps
+    # Nifty Next 50
     "VEDL","GAIL","DLF","PIDILITIND","DABUR","MARICO","GODREJCP","HAVELLS",
-    "SIEMENS","ABB","TRENT","DMART","ZOMATO","IRCTC","AMBUJACEM","ACC",
+    "SIEMENS","ABB","TRENT","DMART","ZOMATO","IRCTC","PIIND","AMBUJACEM","ACC",
     "BANDHANBNK","FEDERALBNK","IDFCFIRSTB","BANKBARODA","PNB","CANBK",
-    "AUROPHARMA","LUPIN","ALKEM","TORNTPHARM","MPHASIS","PERSISTENT",
+    "AUROPHARMA","LUPIN","ALKEM","TORNTPHARM","BIOCON","MPHASIS","PERSISTENT",
     "LTIM","COFORGE","NAUKRI","INDIGO","ASHOKLEY","TVSMOTOR","BHARATFORG",
-    "MOTHERSON","BOSCHLTD","ADANIENT","ADANIGREEN","TATAPOWER",
-    # High-momentum mid caps
-    "DIXON","POLYCAB","KAYNES","HAL","BEL","IRFC","RVNL","RAILTEL",
-    "SUZLON","JSWENERGY","TORNTPOWER","NHPC","SJVN","TATAELXSI",
-    "KPITTECH","LTTS","HAPPSTMNDS","ZENSARTECH","MUTHOOTFIN","CHOLAFIN",
-    "SHRIRAMFIN","BAJAJHLDNG","MAXHEALTH","FORTIS","LALPATHLAB",
-    "IPCALAB","LAURUSLABS","SYNGENE","GRANULES","NATCOPHARM",
+    "MOTHERSON","BOSCHLTD","CUMMINSIND","SRF","ATUL","DEEPAKNTR","NMDC",
+    "SAIL","JINDALSTEL","HINDZINC","ADANIENT","ADANIGREEN","TATAPOWER","CONCOR",
+    # Mid Cap 150
+    "CROMPTON","VOLTAS","WHIRLPOOL","BLUESTARCO","DIXON","POLYCAB","KANSAINER",
+    "BERGEPAINT","INDIGO","SPICEJET","INTERGLOBE","GMRINFRA","IRFC","HUDCO","RVNL",
+    "RAILTEL","NBCC","BEL","HAL","COCHINSHIP","MAZAGON","GRSE","GSPL","PETRONET",
+    "MRPL","CHENNPETRO","GULFOILLUB","CASTROLIND","TIDE","IGPL","VBL","RADICO",
+    "MCDOWELL-N","UNITDSPR","GLOBUSSPR","TILAKNAGAR","BCIL","METROPOLIS",
+    "LALPATHLAB","THYROCARE","MAXHEALTH","FORTIS","RAINBOW","KIMS","HEALTHCAR",
+    "ERIS","GRANULES","NATCOPHARM","AJANTPHARM","JBCHEPHARM","STAR","MANKIND",
+    "IPCALAB","LAURUSLABS","SYNGENE","DIVI","GLAND","CAPLIPOINT","SOLARA",
+    "HDFCAMC","NIPPONLIFE","MUTHOOTFIN","CHOLAFIN","BAJAJHLDNG","LICHSGFIN",
+    "M&MFIN","SHRIRAMFIN","CANFINHOME","GRINDWELL","SCHAEFFLER","TIMKEN","SKFINDIA",
+    "MMTC","NATIONALUM","HINDALCO","MOIL","RATNAMANI","WELCORP","APL","GPIL",
+    "JSWENERGY","TORNTPOWER","CESC","NHPC","SJVN","RPOWER","INOXWIND","SUZLON",
+    "KAYNES","SYRMA","AVALON","IDEAFORGE","PARAS","SAFARI","VSTIND","GILLETTE",
+    "COLPAL","EMAMILTD","JYOTHYLAB","BAJAJCON","PATANJALI","ZYDUSLIFE","WOCKPHARMA",
+    "PFIZER","ABBOTINDIA","SANOFI","GLAXO","NOVARTIND","NUVOCO","JKLAKSHMI",
+    "RAMCOCEM","BIRLACEM","HEIDELBERG","JKCEMENT","STAR","ORIENTCEM","PRISM",
+    "GREENPLY","CENTURYPLY","GREENLAM","ASTRAL","SUPREMEIND","FINOLEX","APOLLO",
+    "CEAT","MRF","BALKRISIND","TVSSRICHAK","EXIDEIND","AMAR","AMARAJABAT",
+    "MINDA","SUNDRMFAST","ENDURANCE","GABRIEL","SUPRAJIT","VARROC","SSWL",
+    "CRAFTSMAN","ELECON","JYOTI","KIRLOSKER","ESCORTS","FORCEMOT","SML","TIINDIA",
+    "NAUKRI","ZENSARTECH","MASTEK","HAPPSTMNDS","CYIENT","KPITTECH","LTTS",
+    "TATAELXSI","SASKEN","SUBEX","RATEGAIN","MAPMYINDIA","ROUTE","JUSTDIAL",
+    "INFOEDGE","POLICYBZR","PAYTM","NYKAA","CARTRADE","EASEMYTRIP","DELHIVERY",
+    "FSN","BRAINBEES","IXIGO","AWFIS","GLENMARK","EMCURE","MEDANTA","YATHARTH",
+    "ASTER","VIJAYA","SENCO","KALYAN","PCJEWELLER","TBZ","PN","TITAN","JUBLPHARMA",
+    # Small / Micro cap high momentum picks
+    "HFCL","STLTECH","GPPL","RCOM","IDEA","TATACOMM","RAILTEL","MTNL",
+    "DIXON","SYRMA","KAYNES","CYIENTDLM","AVALON","IDEAFORGE","OPTIEMUS",
+    "AMBER","VOLPAS","GENESYS","SAKSOFT","NEWGEN","NUCLEUS","TATATECH",
+    "QUESS","TEAMLEASE","MASFIN","SPANDANA","CREDITACC","AROHAN","UJJIVAN",
+    "EQUITAS","SURYODAY","FINCARE","UTKARSH","JANA","ESAFSFB",
 ]
 
 # Remove duplicates while preserving order
@@ -5111,16 +5082,8 @@ def screen_blue_dot(universe, nifty_close=None):
     # Fetch Nifty once for the whole universe (RS Line = stock price / Nifty price)
     if nifty_close is None:
         try:
-            for _nt in ["NIFTYBEES.NS", "JUNIORBEES.NS", "SETFNIF50.NS"]:
-                try:
-                    nifty_df = yf.download(_nt, period="2y", interval="1d", progress=False)
-                    if nifty_df is not None and not nifty_df.empty:
-                        nifty_df = flatten_df(nifty_df)
-                        nifty_close = safe_series(nifty_df["Close"])
-                        if nifty_close is not None and len(nifty_close) >= 60:
-                            break
-                except Exception:
-                    continue
+            nifty_df = yf.download("NIFTYBEES.NS", period="2y", interval="1d", progress=False)
+            nifty_close = safe_series(nifty_df["Close"])
         except Exception:
             nifty_close = None
 
@@ -5408,17 +5371,8 @@ def api_run_all_screens():
     # Fetch Nifty once up front and reuse for Blue Dot (avoids 1 extra download per call)
     nifty_close = None
     try:
-        for _nt in ["NIFTYBEES.NS", "JUNIORBEES.NS", "SETFNIF50.NS"]:
-            try:
-                nifty_df = yf.download(_nt, period="2y", interval="1d",
-                                       progress=False, auto_adjust=False)
-                if nifty_df is not None and not nifty_df.empty:
-                    nifty_df = flatten_df(nifty_df)
-                    nifty_close = safe_series(nifty_df["Close"])
-                    if nifty_close is not None and len(nifty_close) >= 60:
-                        break
-            except Exception:
-                continue
+        nifty_df = yf.download("NIFTYBEES.NS", period="2y", interval="1d", progress=False, auto_adjust=False)
+        nifty_close = safe_series(nifty_df["Close"])
     except Exception:
         nifty_close = None
 
@@ -6294,7 +6248,6 @@ def check_momentum(close_arr, volume_arr, pos):
         else:
             vol_trend = True
 
-        # Relaxed: slope not steeply negative, RSI 45-85, vol not collapsing
         momentum_ok = slope_pct > -0.05 and 45 <= rsi <= 85 and vol_trend
 
         return momentum_ok, {
@@ -6357,7 +6310,7 @@ def detect_5min_breakout(symbol, df, last_closed_pos,
             signal["slope_pct"] = mom_data.get("slope_pct", 0)
             return signal
 
-        # ── PASS 2: RETEST — max 2 bars back (10 min ago max) ────────────────
+        # ── PASS 2: RETEST — max 2 bars back (10 min) ────────────────────────
         for age in [1, 2]:
             bo_idx = last_closed_pos - age
             if bo_idx >= scan_start:
@@ -6395,7 +6348,7 @@ def _try_breakout_at(symbol, idx, close, open_s, high_s, low_s, volume,
         bo_low   = float(low_s[breakout_bar_idx])
         bo_vol   = float(volume[breakout_bar_idx])
 
-        if bo_close <= bo_open * 0.997:   # allow near-doji — don't need perfect bull bar
+        if bo_close <= bo_open * 0.997:   # allow near-doji bars
             return None
 
         # ── Build consolidation zone ──────────────────────────────────────────
@@ -6420,14 +6373,14 @@ def _try_breakout_at(symbol, idx, close, open_s, high_s, low_s, volume,
         zone_high = best_zone["high"]
         zone_low  = best_zone["low"]
 
-        if bo_close < zone_high * 1.0001:   # 0.01% above zone = enough
+        if bo_close < zone_high * 1.0001:
             return None
 
         # ── Retest validation ─────────────────────────────────────────────────
         if entry_type == "RETEST":
             current_close = float(close[last_confirmed_idx])
             pullback_pct  = (bo_close - current_close) / bo_close * 100
-            if not (0 <= pullback_pct <= 3.5):   # allow up to 3.5% pullback
+            if not (0 <= pullback_pct <= 3.5):
                 return None
             if current_close < zone_high * 0.999:
                 return None
@@ -6614,7 +6567,7 @@ def detect_pre_signal(symbol, df, last_closed_pos, secs_to_next_bar,
             return None
 
         # But close shouldn't have already blown far above (that's a breakout, not a pre-signal)
-        if forming_close > zone_high * 1.03:   # allow bar that ran up to 3% above zone
+        if forming_close > zone_high * 1.015:
             return None
 
         # VWAP — computed across all bars up to forming bar
@@ -6754,7 +6707,7 @@ def detect_pullback_surge(symbol, df, last_closed_pos,
             bo_vol   = volume[bo_idx]
 
             if bo_close <= bo_open * 0.997:
-                continue   # original bar must be bullish or near-flat
+                continue   # allow near-doji bars
 
             for zone_len in range(2, min(10, bo_idx - scan_start) + 1):
                 z_start = bo_idx - zone_len
@@ -6767,7 +6720,7 @@ def detect_pullback_surge(symbol, df, last_closed_pos,
                 z_pct = (z_high - z_low) / z_high * 100
                 if z_pct > 2.5:
                     continue
-                if bo_close < z_high * 1.0001:
+                if bo_close < z_high * 1.0005:
                     continue   # breakout bar didn't close above zone
 
                 bo_vol_lb    = max(today_start, bo_idx - 15)
@@ -6973,13 +6926,11 @@ def run_5min_scanner(universe=None):
     syms = universe if universe else DEFAULT_UNIVERSE
 
     signals = []
-    # Cap workers at 10 — Render free tier has limited RAM/CPU
-    # More than 10 concurrent yfinance calls triggers rate limiting
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
         futures = {pool.submit(_scan_one, sym): sym for sym in syms}
-        for future in concurrent.futures.as_completed(futures, timeout=25):
+        for future in concurrent.futures.as_completed(futures):
             try:
-                result = future.result(timeout=8)
+                result = future.result(timeout=20)
                 if result:
                     signals.append(result)
             except Exception:
@@ -7434,34 +7385,32 @@ def scanner_page():
 
 @app.route("/", methods=["GET","POST"])
 def home():
-    results = []
-    history = performance()
+    results   = []
+    history   = performance()
     error_msg = None
 
     if request.method == "POST":
+        import concurrent.futures
         stocks_raw = request.form.get("stocks", "")
         stocks_raw = stocks_raw.replace(",", "\n")
         stocks = [s.strip().upper() for s in stocks_raw.split("\n") if s.strip()]
 
-        # Cap at 5 stocks per search — Render free tier has 30s request timeout
-        # Searching more than 5 stocks causes Internal Server Error
+        # Limit to 5 stocks — Render free tier kills requests after 30s
         if len(stocks) > 5:
-            error_msg = f"⚠️ Maximum 5 stocks per search on free hosting (you entered {len(stocks)}). Showing first 5."
+            error_msg = f"⚠️ Max 5 stocks per search (you entered {len(stocks)}). Showing first 5 only. Split into batches of 5."
             stocks = stocks[:5]
 
-        # Run analysis in parallel for speed
-        import concurrent.futures
+        # Parallel fetch — 5 stocks in ~5s instead of ~25s
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-            futures = {pool.submit(analyze, s): s for s in stocks}
-            for future in concurrent.futures.as_completed(futures, timeout=25):
+            futs = {pool.submit(analyze, s): s for s in stocks}
+            for fut in concurrent.futures.as_completed(futs, timeout=25):
                 try:
-                    r = future.result(timeout=20)
-                    if r:
-                        results.append(r)
+                    r = fut.result(timeout=20)
+                    if r: results.append(r)
                 except Exception:
                     pass
 
-        # Restore original order
+        # Restore input order
         order = {s: i for i, s in enumerate(stocks)}
         results.sort(key=lambda x: order.get(x.get("symbol",""), 99))
 
