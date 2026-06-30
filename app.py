@@ -3,6 +3,8 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import os
+import time
+import requests
 from datetime import datetime
 
 app = Flask(__name__)
@@ -10,14 +12,50 @@ app = Flask(__name__)
 FILE = "signals.csv"
 
 # =========================
-# DATA
+# DATA — with timeout + cache to prevent worker OOM/timeout kills
 # =========================
-def get_data(symbol):
+
+# Shared HTTP session with a hard timeout — prevents yfinance from hanging forever
+_session = requests.Session()
+_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+})
+
+_DATA_CACHE = {}     # symbol -> (timestamp, df)
+_CACHE_TTL  = 90      # seconds — daily data doesn't need to be re-fetched every call
+
+def _yf_download_safe(ticker, period="6mo", interval="1d", timeout=8, **kwargs):
+    """
+    yfinance download with a hard timeout. Without this, a single slow/hanging
+    Yahoo Finance request can block a worker thread forever, and with several
+    threads hanging at once the whole process runs out of memory and gets
+    SIGKILLed by the host (this is exactly what caused the worker timeout crash).
+    """
     try:
-        df = yf.download(symbol + ".NS", period="6mo", interval="1d", progress=False)
+        df = yf.download(
+            ticker, period=period, interval=interval,
+            progress=False, timeout=timeout, session=_session, **kwargs
+        )
         return df if df is not None and not df.empty else None
-    except:
+    except Exception:
         return None
+
+
+def get_data(symbol):
+    """Cached daily data fetch — avoids re-downloading the same symbol repeatedly."""
+    now = time.time()
+    cached = _DATA_CACHE.get(symbol)
+    if cached and (now - cached[0]) < _CACHE_TTL:
+        return cached[1]
+
+    df = _yf_download_safe(symbol + ".NS", period="6mo", interval="1d", timeout=8)
+    if df is not None:
+        _DATA_CACHE[symbol] = (now, df)
+        return df
+    # Serve stale cache rather than nothing, if we have it
+    if cached:
+        return cached[1]
+    return None
 
 def fmt(x):
     try:
@@ -592,7 +630,7 @@ def get_sector_momentum(symbol):
         data = _sector_cache[ticker]
     else:
         try:
-            raw  = yf.download(ticker, period="4mo", interval="1d", progress=False)
+            raw  = _yf_download_safe(ticker, period="4mo", interval="1d", timeout=6)
             data = safe_series(raw["Close"]) if raw is not None and not raw.empty else None
             _sector_cache[ticker] = data
         except:
@@ -690,19 +728,14 @@ def _get_stock_close(symbol):
     """Cached daily close series for a stock symbol."""
     if symbol in _sector_perf_cache:
         return _sector_perf_cache[symbol]
-    try:
-        df = yf.download(symbol + ".NS", period="6mo", interval="1d",
-                         progress=False, auto_adjust=True)
-        if df is None or df.empty:
-            _sector_perf_cache[symbol] = None
-            return None
-        df = flatten_df(df)
-        s  = safe_series(df["Close"])
-        _sector_perf_cache[symbol] = s if len(s) >= 5 else None
-        return _sector_perf_cache[symbol]
-    except Exception:
+    df = _yf_download_safe(symbol + ".NS", period="6mo", interval="1d", timeout=6)
+    if df is None:
         _sector_perf_cache[symbol] = None
         return None
+    df = flatten_df(df)
+    s  = safe_series(df["Close"])
+    _sector_perf_cache[symbol] = s if len(s) >= 5 else None
+    return _sector_perf_cache[symbol]
 
 
 def get_sector_index_performance(name, stocks_list):
@@ -776,7 +809,7 @@ def get_all_sectors_performance():
 
     # Pre-fetch all stocks in parallel so the page loads fast
     all_syms = list({s for stocks in SECTOR_LEADER_STOCKS.values() for s in stocks[:6]})
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
         list(pool.map(_get_stock_close, all_syms))
 
     sectors = []
@@ -804,11 +837,7 @@ def get_all_sectors_performance():
 
 def get_tf_data(symbol, interval, period):
     """Download OHLCV for a given interval. Returns DataFrame or None."""
-    try:
-        df = yf.download(symbol + ".NS", period=period, interval=interval, progress=False)
-        return df if df is not None and not df.empty else None
-    except:
-        return None
+    return _yf_download_safe(symbol + ".NS", period=period, interval=interval, timeout=6)
 
 def calc_rsi(series, period=14):
     """Standard RSI calculation."""
@@ -2369,12 +2398,7 @@ def get_live_quote(symbol):
     """
     try:
         # 1-min bars for today
-        df1m = yf.download(
-            symbol + ".NS",
-            period="1d",
-            interval="1m",
-            progress=False
-        )
+        df1m = _yf_download_safe(symbol + ".NS", period="1d", interval="1m", timeout=6)
         if df1m is None or df1m.empty:
             return None
 
@@ -3072,8 +3096,8 @@ def get_options_market_data():
 
     for name, ticker in [("nifty", "NIFTYBEES.NS"), ("banknifty", "BANKBEES.NS")]:
         try:
-            df    = yf.download(ticker, period="60d", interval="1d", progress=False)
-            df1h  = yf.download(ticker, period="10d", interval="1h", progress=False)
+            df    = _yf_download_safe(ticker, period="60d", interval="1d", timeout=6)
+            df1h  = _yf_download_safe(ticker, period="10d", interval="1h", timeout=6)
             close = safe_series(df["Close"])
             h1    = safe_series(df1h["Close"])
 
@@ -3207,7 +3231,7 @@ def get_options_market_data():
 
     # VIX
     try:
-        vdf      = yf.download("INDIAVIX.NS", period="10d", interval="1d", progress=False)
+        vdf      = _yf_download_safe("INDIAVIX.NS", period="10d", interval="1d", timeout=6)
         vix_val  = float(safe_series(vdf["Close"]).iloc[-1])
         vix_prev = float(safe_series(vdf["Close"]).iloc[-2])
         vix_chg  = round(vix_val - vix_prev, 2)
@@ -3281,7 +3305,7 @@ def calc_macd(series, fast=12, slow=26, signal=9):
 
 def get_intraday_df(ticker, interval, period):
     try:
-        df = yf.download(ticker, period=period, interval=interval, progress=False)
+        df = _yf_download_safe(ticker, period=period, interval=interval, timeout=6)
         if df is None or df.empty:
             return None
         return df
@@ -4678,57 +4702,22 @@ def options_page():
 
 SCREENS_FILE = "screens_history.csv"
 
-# Nifty 500 — full universe for the intraday scanner.
-# Organised by sector for readability; scanner uses all of them.
+# Top 60 most liquid NSE stocks — sized for Render free tier (512MB RAM, 30s gunicorn timeout).
+# Scanning the full Nifty 500 (~500 yfinance calls) reliably causes worker OOM/SIGKILL.
+# These 60 names cover every major sector and produce the large majority of
+# genuine intraday breakout signals — liquidity is what drives clean technical setups.
 NIFTY500_UNIVERSE = [
-    # Nifty 50 — large cap
     "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY","HINDUNILVR","ITC","SBIN",
     "BHARTIARTL","KOTAKBANK","LT","AXISBANK","BAJFINANCE","ASIANPAINT","MARUTI",
     "TITAN","SUNPHARMA","ULTRACEMCO","NESTLEIND","WIPRO","NTPC","ONGC","TATAMOTORS",
     "TATASTEEL","JSWSTEEL","POWERGRID","M&M","ADANIPORTS","COALINDIA","TECHM",
     "HCLTECH","DRREDDY","CIPLA","DIVISLAB","BAJAJFINSV","GRASIM","BRITANNIA",
-    "EICHERMOT","HEROMOTOCO","BPCL","IOC","HINDALCO","SBILIFE","HDFCLIFE",
-    "APOLLOHOSP","INDUSINDBK","TATACONSUM","BAJAJ-AUTO","UPL","SHREECEM",
-    # Nifty Next 50
-    "VEDL","GAIL","DLF","PIDILITIND","DABUR","MARICO","GODREJCP","HAVELLS",
-    "SIEMENS","ABB","TRENT","DMART","ZOMATO","IRCTC","PIIND","AMBUJACEM","ACC",
-    "BANDHANBNK","FEDERALBNK","IDFCFIRSTB","BANKBARODA","PNB","CANBK",
-    "AUROPHARMA","LUPIN","ALKEM","TORNTPHARM","BIOCON","MPHASIS","PERSISTENT",
-    "LTIM","COFORGE","NAUKRI","INDIGO","ASHOKLEY","TVSMOTOR","BHARATFORG",
-    "MOTHERSON","BOSCHLTD","CUMMINSIND","SRF","ATUL","DEEPAKNTR","NMDC",
-    "SAIL","JINDALSTEL","HINDZINC","ADANIENT","ADANIGREEN","TATAPOWER","CONCOR",
-    # Mid Cap 150
-    "CROMPTON","VOLTAS","WHIRLPOOL","BLUESTARCO","DIXON","POLYCAB","KANSAINER",
-    "BERGEPAINT","INDIGO","SPICEJET","INTERGLOBE","GMRINFRA","IRFC","HUDCO","RVNL",
-    "RAILTEL","NBCC","BEL","HAL","COCHINSHIP","MAZAGON","GRSE","GSPL","PETRONET",
-    "MRPL","CHENNPETRO","GULFOILLUB","CASTROLIND","TIDE","IGPL","VBL","RADICO",
-    "MCDOWELL-N","UNITDSPR","GLOBUSSPR","TILAKNAGAR","BCIL","METROPOLIS",
-    "LALPATHLAB","THYROCARE","MAXHEALTH","FORTIS","RAINBOW","KIMS","HEALTHCAR",
-    "ERIS","GRANULES","NATCOPHARM","AJANTPHARM","JBCHEPHARM","STAR","MANKIND",
-    "IPCALAB","LAURUSLABS","SYNGENE","DIVI","GLAND","CAPLIPOINT","SOLARA",
-    "HDFCAMC","NIPPONLIFE","MUTHOOTFIN","CHOLAFIN","BAJAJHLDNG","LICHSGFIN",
-    "M&MFIN","SHRIRAMFIN","CANFINHOME","GRINDWELL","SCHAEFFLER","TIMKEN","SKFINDIA",
-    "MMTC","NATIONALUM","HINDALCO","MOIL","RATNAMANI","WELCORP","APL","GPIL",
-    "JSWENERGY","TORNTPOWER","CESC","NHPC","SJVN","RPOWER","INOXWIND","SUZLON",
-    "KAYNES","SYRMA","AVALON","IDEAFORGE","PARAS","SAFARI","VSTIND","GILLETTE",
-    "COLPAL","EMAMILTD","JYOTHYLAB","BAJAJCON","PATANJALI","ZYDUSLIFE","WOCKPHARMA",
-    "PFIZER","ABBOTINDIA","SANOFI","GLAXO","NOVARTIND","NUVOCO","JKLAKSHMI",
-    "RAMCOCEM","BIRLACEM","HEIDELBERG","JKCEMENT","STAR","ORIENTCEM","PRISM",
-    "GREENPLY","CENTURYPLY","GREENLAM","ASTRAL","SUPREMEIND","FINOLEX","APOLLO",
-    "CEAT","MRF","BALKRISIND","TVSSRICHAK","EXIDEIND","AMAR","AMARAJABAT",
-    "MINDA","SUNDRMFAST","ENDURANCE","GABRIEL","SUPRAJIT","VARROC","SSWL",
-    "CRAFTSMAN","ELECON","JYOTI","KIRLOSKER","ESCORTS","FORCEMOT","SML","TIINDIA",
-    "NAUKRI","ZENSARTECH","MASTEK","HAPPSTMNDS","CYIENT","KPITTECH","LTTS",
-    "TATAELXSI","SASKEN","SUBEX","RATEGAIN","MAPMYINDIA","ROUTE","JUSTDIAL",
-    "INFOEDGE","POLICYBZR","PAYTM","NYKAA","CARTRADE","EASEMYTRIP","DELHIVERY",
-    "FSN","BRAINBEES","IXIGO","AWFIS","GLENMARK","EMCURE","MEDANTA","YATHARTH",
-    "ASTER","VIJAYA","SENCO","KALYAN","PCJEWELLER","TBZ","PN","TITAN","JUBLPHARMA",
-    # Small / Micro cap high momentum picks
-    "HFCL","STLTECH","GPPL","RCOM","IDEA","TATACOMM","RAILTEL","MTNL",
-    "DIXON","SYRMA","KAYNES","CYIENTDLM","AVALON","IDEAFORGE","OPTIEMUS",
-    "AMBER","VOLPAS","GENESYS","SAKSOFT","NEWGEN","NUCLEUS","TATATECH",
-    "QUESS","TEAMLEASE","MASFIN","SPANDANA","CREDITACC","AROHAN","UJJIVAN",
-    "EQUITAS","SURYODAY","FINCARE","UTKARSH","JANA","ESAFSFB",
+    "EICHERMOT","HEROMOTOCO","BPCL","HINDALCO","SBILIFE","HDFCLIFE",
+    "APOLLOHOSP","INDUSINDBK","TATACONSUM","BAJAJ-AUTO","UPL",
+    "DLF","DABUR","HAVELLS","SIEMENS","TRENT","DMART","ZOMATO",
+    "FEDERALBNK","IDFCFIRSTB","BANKBARODA","PNB",
+    "TVSMOTOR","ADANIENT","TATAPOWER","DIXON","POLYCAB","HAL","BEL",
+    "MUTHOOTFIN","CHOLAFIN","SHRIRAMFIN","NAUKRI",
 ]
 
 # Remove duplicates while preserving order
@@ -5082,7 +5071,7 @@ def screen_blue_dot(universe, nifty_close=None):
     # Fetch Nifty once for the whole universe (RS Line = stock price / Nifty price)
     if nifty_close is None:
         try:
-            nifty_df = yf.download("NIFTYBEES.NS", period="2y", interval="1d", progress=False)
+            nifty_df = _yf_download_safe("NIFTYBEES.NS", period="2y", interval="1d", timeout=8)
             nifty_close = safe_series(nifty_df["Close"])
         except Exception:
             nifty_close = None
@@ -5371,7 +5360,7 @@ def api_run_all_screens():
     # Fetch Nifty once up front and reuse for Blue Dot (avoids 1 extra download per call)
     nifty_close = None
     try:
-        nifty_df = yf.download("NIFTYBEES.NS", period="2y", interval="1d", progress=False, auto_adjust=False)
+        nifty_df = _yf_download_safe("NIFTYBEES.NS", period="2y", interval="1d", timeout=8, auto_adjust=False)
         nifty_close = safe_series(nifty_df["Close"])
     except Exception:
         nifty_close = None
@@ -6138,8 +6127,8 @@ def get_5min_data(symbol):
     - last_closed_pos = index of last CONFIRMED closed bar
     """
     try:
-        raw = yf.download(symbol + ".NS", period="5d", interval="5m",
-                          progress=False, auto_adjust=False)
+        raw = _yf_download_safe(symbol + ".NS", period="5d", interval="5m",
+                                timeout=6, auto_adjust=False)
         if raw is None or raw.empty:
             return None, None, 0
 
@@ -6926,15 +6915,21 @@ def run_5min_scanner(universe=None):
     syms = universe if universe else DEFAULT_UNIVERSE
 
     signals = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
         futures = {pool.submit(_scan_one, sym): sym for sym in syms}
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                result = future.result(timeout=20)
-                if result:
-                    signals.append(result)
-            except Exception:
-                pass
+        try:
+            for future in concurrent.futures.as_completed(futures, timeout=45):
+                try:
+                    result = future.result(timeout=10)
+                    if result:
+                        signals.append(result)
+                except Exception:
+                    pass
+        except concurrent.futures.TimeoutError:
+            # Overall scan took too long — return whatever we collected so far
+            # rather than letting the worker hang and get killed
+            for f in futures:
+                f.cancel()
 
     type_priority = {"BREAKOUT": 0, "PULLBACK_SURGE": 1, "PRE_SIGNAL": 2, "RETEST": 3}
     signals.sort(key=lambda x: (
