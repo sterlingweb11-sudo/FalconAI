@@ -63,6 +63,38 @@ def fmt(x):
     except:
         return 0.0
 
+# ── Index price scaling ──────────────────────────────────────────────────────
+# ^NSEI / ^NSEBANK (the real index tickers) are blocked by Yahoo Finance from
+# non-India server IPs (Render, PythonAnywhere, etc). We use the corresponding
+# liquid ETF as a free data proxy instead — NIFTYBEES.NS for Nifty 50,
+# BANKBEES.NS for Bank Nifty — but ETF unit price is NOT the index value
+# (NIFTYBEES ~₹272 vs Nifty 50 ~24,500+; BANKBEES ~₹602 vs Bank Nifty ~58,000+).
+# These factors convert ETF price back to the real index-equivalent level so
+# the numbers shown on screen match what you'd see on NSE/any broker terminal.
+# Recalibrate periodically — both ETFs do small periodic unit splits/bonuses.
+INDEX_SCALE_FACTOR = {
+    "NIFTYBEES.NS": 90.0,    # NIFTYBEES ₹272 × 90 ≈ Nifty 50 ~24,500
+    "BANKBEES.NS":  96.5,    # BANKBEES ₹602 × 96.5 ≈ Bank Nifty ~58,100
+}
+
+def scale_to_index(etf_ticker, price):
+    """Convert an ETF unit price to its index-equivalent display price."""
+    factor = INDEX_SCALE_FACTOR.get(etf_ticker, 1.0)
+    try:
+        return round(float(price) * factor, 2)
+    except Exception:
+        return price
+
+def scale_series_to_index(etf_ticker, series):
+    """Scale a full price series (for charts) to index-equivalent level."""
+    factor = INDEX_SCALE_FACTOR.get(etf_ticker, 1.0)
+    try:
+        return series * factor
+    except Exception:
+        return series
+
+
+
 def safe_series(x):
     try:
         if isinstance(x, pd.DataFrame):
@@ -3098,6 +3130,17 @@ def get_options_market_data():
         try:
             df    = _yf_download_safe(ticker, period="60d", interval="1d", timeout=6)
             df1h  = _yf_download_safe(ticker, period="10d", interval="1h", timeout=6)
+            df    = flatten_df(df)
+            df1h  = flatten_df(df1h)
+
+            # Scale OHLC to index-equivalent level (ETF price * factor ≈ real index)
+            factor = INDEX_SCALE_FACTOR.get(ticker, 1.0)
+            for col in ["Open", "High", "Low", "Close"]:
+                if col in df.columns:
+                    df[col] = df[col] * factor
+                if col in df1h.columns:
+                    df1h[col] = df1h[col] * factor
+
             close = safe_series(df["Close"])
             h1    = safe_series(df1h["Close"])
 
@@ -3308,6 +3351,13 @@ def get_intraday_df(ticker, interval, period):
         df = _yf_download_safe(ticker, period=period, interval=interval, timeout=6)
         if df is None or df.empty:
             return None
+        df = flatten_df(df)
+        # Scale ETF proxy price to real index-equivalent level
+        factor = INDEX_SCALE_FACTOR.get(ticker, 1.0)
+        if factor != 1.0:
+            for col in ["Open", "High", "Low", "Close"]:
+                if col in df.columns:
+                    df[col] = df[col] * factor
         return df
     except Exception:
         return None
@@ -4702,22 +4752,59 @@ def options_page():
 
 SCREENS_FILE = "screens_history.csv"
 
-# Top 60 most liquid NSE stocks — sized for Render free tier (512MB RAM, 30s gunicorn timeout).
-# Scanning the full Nifty 500 (~500 yfinance calls) reliably causes worker OOM/SIGKILL.
-# These 60 names cover every major sector and produce the large majority of
-# genuine intraday breakout signals — liquidity is what drives clean technical setups.
+# 250 liquid Nifty 500 stocks — broad sector coverage while staying within
+# Render free tier limits (512MB RAM). The full 500-stock list caused worker
+# SIGKILL crashes (confirmed in production logs) because too many simultaneous
+# yfinance calls exhausted memory. This list is run in BATCHES (see
+# run_5min_scanner below) so even 250 names never overload the server at once.
 NIFTY500_UNIVERSE = [
+    # Nifty 50
     "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY","HINDUNILVR","ITC","SBIN",
     "BHARTIARTL","KOTAKBANK","LT","AXISBANK","BAJFINANCE","ASIANPAINT","MARUTI",
     "TITAN","SUNPHARMA","ULTRACEMCO","NESTLEIND","WIPRO","NTPC","ONGC","TATAMOTORS",
     "TATASTEEL","JSWSTEEL","POWERGRID","M&M","ADANIPORTS","COALINDIA","TECHM",
     "HCLTECH","DRREDDY","CIPLA","DIVISLAB","BAJAJFINSV","GRASIM","BRITANNIA",
-    "EICHERMOT","HEROMOTOCO","BPCL","HINDALCO","SBILIFE","HDFCLIFE",
-    "APOLLOHOSP","INDUSINDBK","TATACONSUM","BAJAJ-AUTO","UPL",
-    "DLF","DABUR","HAVELLS","SIEMENS","TRENT","DMART","ZOMATO",
-    "FEDERALBNK","IDFCFIRSTB","BANKBARODA","PNB",
-    "TVSMOTOR","ADANIENT","TATAPOWER","DIXON","POLYCAB","HAL","BEL",
-    "MUTHOOTFIN","CHOLAFIN","SHRIRAMFIN","NAUKRI",
+    "EICHERMOT","HEROMOTOCO","BPCL","IOC","HINDALCO","SBILIFE","HDFCLIFE",
+    "APOLLOHOSP","INDUSINDBK","TATACONSUM","BAJAJ-AUTO","UPL","SHREECEM",
+    # Nifty Next 50
+    "VEDL","GAIL","DLF","PIDILITIND","DABUR","MARICO","GODREJCP","HAVELLS",
+    "SIEMENS","ABB","TRENT","DMART","ZOMATO","IRCTC","AMBUJACEM","ACC",
+    "BANDHANBNK","FEDERALBNK","IDFCFIRSTB","BANKBARODA","PNB","CANBK",
+    "AUROPHARMA","LUPIN","ALKEM","TORNTPHARM","MPHASIS","PERSISTENT",
+    "LTIM","COFORGE","NAUKRI","INDIGO","ASHOKLEY","TVSMOTOR","BHARATFORG",
+    "MOTHERSON","BOSCHLTD","CUMMINSIND","SRF","NMDC",
+    "SAIL","JINDALSTEL","HINDZINC","ADANIENT","ADANIGREEN","TATAPOWER","CONCOR",
+    # Mid-cap liquid names
+    "CROMPTON","VOLTAS","WHIRLPOOL","DIXON","POLYCAB",
+    "BERGEPAINT","GMRINFRA","IRFC","HUDCO","RVNL",
+    "RAILTEL","NBCC","BEL","HAL","PETRONET",
+    "MRPL","CASTROLIND","VBL","RADICO",
+    "MCDOWELL-N","UNITDSPR","METROPOLIS",
+    "LALPATHLAB","MAXHEALTH","FORTIS",
+    "GRANULES","NATCOPHARM","AJANTPHARM","MANKIND",
+    "IPCALAB","LAURUSLABS","SYNGENE",
+    "HDFCAMC","MUTHOOTFIN","CHOLAFIN","BAJAJHLDNG","LICHSGFIN",
+    "SHRIRAMFIN","CANFINHOME","SCHAEFFLER","TIMKEN","SKFINDIA",
+    "NATIONALUM","RATNAMANI",
+    "JSWENERGY","TORNTPOWER","CESC","NHPC","SJVN","SUZLON",
+    "KAYNES","SYRMA","IDEAFORGE","GILLETTE",
+    "COLPAL","EMAMILTD","ZYDUSLIFE","WOCKPHARMA",
+    "ABBOTINDIA","NUVOCO","JKLAKSHMI",
+    "RAMCOCEM","JKCEMENT",
+    "ASTRAL","SUPREMEIND","FINOLEX",
+    "CEAT","MRF","BALKRISIND","EXIDEIND","AMARAJABAT",
+    "SUNDRMFAST","ENDURANCE","GABRIEL","SUPRAJIT",
+    "ESCORTS","TIINDIA",
+    "ZENSARTECH","MASTEK","HAPPSTMNDS","CYIENT","KPITTECH","LTTS",
+    "TATAELXSI","RATEGAIN","MAPMYINDIA","JUSTDIAL",
+    "INFOEDGE","POLICYBZR","PAYTM","NYKAA","DELHIVERY",
+    "GLENMARK","MEDANTA",
+    "KALYAN",
+    # Small/micro-cap momentum names
+    "HFCL","TATACOMM",
+    "DIXON","SYRMA","KAYNES","AMBER",
+    "NEWGEN","TATATECH",
+    "QUESS","CREDITACC","UJJIVAN","EQUITAS",
 ]
 
 # Remove duplicates while preserving order
@@ -6172,7 +6259,7 @@ def get_5min_data(symbol):
             last_closed_pos  = len(df) - 2
             secs_to_next_bar = 0
 
-        if last_closed_pos < 5:
+        if last_closed_pos < 4:
             return None, None, 0
 
         return df, last_closed_pos, secs_to_next_bar
@@ -6207,33 +6294,35 @@ def check_momentum(close_arr, volume_arr, pos):
     Uses numpy arrays for speed.
     """
     try:
-        if pos < 15:
+        if pos < 8:
             return False, {}
 
         window = close_arr[max(0, pos-14):pos+1]
-        if len(window) < 10:
+        if len(window) < 6:
             return False, {}
 
-        # 1. Slope — linear regression on last 10 closes
-        y = window[-10:].astype(float)
-        x = np.arange(10, dtype=float)
+        # 1. Slope — linear regression on available closes (up to last 10)
+        lookback = min(10, len(window))
+        y = window[-lookback:].astype(float)
+        x = np.arange(lookback, dtype=float)
         slope = float(np.polyfit(x, y, 1)[0])
         slope_pct = (slope / y[0]) * 100 if y[0] > 0 else 0   # % per bar
 
-        # 2. RSI(7)
+        # 2. RSI(7) — use whatever bars are available
         closes_14 = close_arr[max(0, pos-14):pos+1].astype(float)
         diff  = np.diff(closes_14)
         gains = np.where(diff > 0, diff, 0)
         losses= np.where(diff < 0, -diff, 0)
-        avg_g = gains[-7:].mean()  if len(gains)  >= 7 else gains.mean()
-        avg_l = losses[-7:].mean() if len(losses) >= 7 else losses.mean()
+        rsi_lb = min(7, len(gains))
+        avg_g = gains[-rsi_lb:].mean()  if len(gains)  > 0 else 0
+        avg_l = losses[-rsi_lb:].mean() if len(losses) > 0 else 0
         rsi   = 100 - (100 / (1 + avg_g / avg_l)) if avg_l > 0 else 100
 
         # 3. Volume trend
-        if pos >= 13:
-            recent_vol = volume_arr[pos-2:pos+1].mean()
-            prior_vol  = volume_arr[max(0,pos-12):pos-2].mean()
-            vol_trend  = recent_vol >= prior_vol * 0.70   # lenient — not collapsing
+        if pos >= 6:
+            recent_vol = volume_arr[max(0,pos-2):pos+1].mean()
+            prior_vol  = volume_arr[max(0,pos-8):max(1,pos-2)].mean()
+            vol_trend  = recent_vol >= prior_vol * 0.70 if prior_vol > 0 else True
         else:
             vol_trend = True
 
@@ -6905,31 +6994,37 @@ def _scan_one(sym):
 
 def run_5min_scanner(universe=None):
     """
-    Parallel scan — all symbols fetched simultaneously via ThreadPoolExecutor.
-    Total scan time ≈ slowest single download (not sum of all).
-    This eliminates the sequential delay that made signals appear stale.
+    Batched parallel scan — processes the universe in chunks of 50 stocks
+    at a time (6 threads per batch) instead of firing all ~250 at once.
+    This keeps peak memory bounded regardless of universe size, which is
+    what caused the worker SIGKILL crash when the full list ran unbatched.
+    Each batch finishes before the next starts, so total scan time is
+    roughly (num_batches × slowest-symbol-in-batch) rather than instant —
+    a small trade-off for a server that doesn't crash.
     Returns (signals, mkt_open, mkt_time).
     """
     import concurrent.futures
     mkt_open, mkt_time = is_market_open()
     syms = universe if universe else DEFAULT_UNIVERSE
 
+    BATCH_SIZE = 50
+    batches = [syms[i:i+BATCH_SIZE] for i in range(0, len(syms), BATCH_SIZE)]
+
     signals = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(_scan_one, sym): sym for sym in syms}
-        try:
-            for future in concurrent.futures.as_completed(futures, timeout=45):
-                try:
-                    result = future.result(timeout=10)
-                    if result:
-                        signals.append(result)
-                except Exception:
-                    pass
-        except concurrent.futures.TimeoutError:
-            # Overall scan took too long — return whatever we collected so far
-            # rather than letting the worker hang and get killed
-            for f in futures:
-                f.cancel()
+    for batch in batches:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(_scan_one, sym): sym for sym in batch}
+            try:
+                for future in concurrent.futures.as_completed(futures, timeout=20):
+                    try:
+                        result = future.result(timeout=8)
+                        if result:
+                            signals.append(result)
+                    except Exception:
+                        pass
+            except concurrent.futures.TimeoutError:
+                for f in futures:
+                    f.cancel()
 
     type_priority = {"BREAKOUT": 0, "PULLBACK_SURGE": 1, "PRE_SIGNAL": 2, "RETEST": 3}
     signals.sort(key=lambda x: (
@@ -7371,6 +7466,51 @@ def api_run_5min_scanner():
 def api_scanner_history():
     from flask import jsonify
     return jsonify({"history": load_scanner_history()})
+
+
+@app.route("/api/scanner_debug/<symbol>")
+def api_scanner_debug(symbol):
+    """
+    Diagnostic route — shows the ACTUAL computed numbers for a stock right now:
+    bar count, slope, RSI, volume trend, zone width, breakout distance.
+    Use this to see exactly which filter is blocking a signal instead of guessing.
+    Visit: /api/scanner_debug/RELIANCE
+    """
+    from flask import jsonify
+    sym = symbol.upper().strip()
+    out = {"symbol": sym}
+
+    df, last_closed_pos, secs_to_next_bar = get_5min_data(sym)
+    if df is None:
+        out["error"] = "No 5-min data returned (yfinance fetch failed or too few bars)"
+        return jsonify(out)
+
+    out["total_bars"]      = len(df)
+    out["last_closed_pos"] = last_closed_pos
+    out["secs_to_next_bar"] = secs_to_next_bar
+    out["last_bar_time"]   = str(df.index[-1])
+    out["last_close"]      = round(float(df["Close"].iloc[last_closed_pos]), 2)
+
+    close  = df["Close"].values
+    volume = df["Volume"].values
+
+    mom_ok, mom_data = check_momentum(close, volume, last_closed_pos)
+    out["momentum_check"] = {"passed": mom_ok, **mom_data}
+
+    breakout = detect_5min_breakout(sym, df, last_closed_pos)
+    out["breakout_signal"] = breakout if breakout else "None — no valid zone+breakout+volume combo found"
+
+    pre = detect_pre_signal(sym, df, last_closed_pos, secs_to_next_bar)
+    out["pre_signal"] = pre if pre else "None"
+
+    pullback = detect_pullback_surge(sym, df, last_closed_pos)
+    out["pullback_surge_signal"] = pullback if pullback else "None"
+
+    mkt_open, mkt_time = is_market_open()
+    out["market_open"] = mkt_open
+    out["market_time_ist"] = mkt_time
+
+    return jsonify(out)
 
 
 @app.route("/scanner")
